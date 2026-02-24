@@ -18,6 +18,16 @@ interface JoystickState {
   touchId: number | null;
 }
 
+interface FlyingSword {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angle: number;
+  life: number;
+}
+
 const GameEngine: React.FC<GameEngineProps> = ({ 
   gameState, 
   stats, 
@@ -29,6 +39,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
   const requestRef = useRef<number>();
   const statsRef = useRef(stats);
   const enemiesRef = useRef<Enemy[]>([]);
+  const flyingSwordsRef = useRef<FlyingSword[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const mouseRef = useRef({ x: 0, y: 0 });
   const lastMouseRef = useRef({ x: 0, y: 0 });
@@ -37,8 +48,6 @@ const GameEngine: React.FC<GameEngineProps> = ({
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const gameTimeRef = useRef(0);
   const lastSpawnTimeRef = useRef(0);
-  const stabOffsetRef = useRef(0);
-  const isStabbingRef = useRef(false);
 
   // Dual Joystick Refs
   const moveJoystick = useRef<JoystickState>({
@@ -54,6 +63,24 @@ const GameEngine: React.FC<GameEngineProps> = ({
     statsRef.current = stats;
   }, [stats]);
 
+  useEffect(() => {
+    if (gameState === GameState.START || gameState === GameState.GAMEOVER) {
+      // Reset game state when not playing or game over
+      enemiesRef.current = [];
+      particlesRef.current = [];
+      flyingSwordsRef.current = [];
+      playerPosRef.current = { x: 0, y: 0 };
+      cameraRef.current = { x: 0, y: 0 };
+      gameTimeRef.current = 0;
+      lastSpawnTimeRef.current = 0;
+      currentBladeAngleRef.current = 0;
+      // Clear keys to prevent stuck movement/skills
+      Object.keys(keysRef.current).forEach(key => {
+        keysRef.current[key] = false;
+      });
+    }
+  }, [gameState]);
+
   const createEnemy = useCallback(() => {
     const angle = Math.random() * Math.PI * 2;
     const distance = Math.max(window.innerWidth, window.innerHeight) * 0.7;
@@ -61,7 +88,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
     const spawnY = playerPosRef.current.y + Math.sin(angle) * distance;
 
     const difficulty = 1 + gameTimeRef.current / 45;
-    const hp = 15 * difficulty;
+    const hp = 8 * difficulty;
     
     const newEnemy: Enemy = {
       id: Math.random().toString(36).substr(2, 9),
@@ -88,7 +115,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
     if (gameState !== GameState.PLAYING) return;
 
     gameTimeRef.current += dt / 1000;
-    const speed = statsRef.current.moveSpeed;
+    const speed = statsRef.current.isSpinning ? statsRef.current.moveSpeed * 1.5 : statsRef.current.moveSpeed;
     
     // 1. Move Player (Keyboard + Left Joystick)
     let moveVx = 0;
@@ -123,6 +150,8 @@ const GameEngine: React.FC<GameEngineProps> = ({
       if (mag > 0.1) {
         currentBladeAngleRef.current = Math.atan2(aimJoystick.current.vector.y, aimJoystick.current.vector.x);
       }
+    } else if (statsRef.current.isSpinning) {
+      currentBladeAngleRef.current += statsRef.current.skills.e.extraValue2 || 0.4; // Rapid spin
     } else {
       const mouseMoved = Math.abs(mouseRef.current.x - lastMouseRef.current.x) > 1 || Math.abs(mouseRef.current.y - lastMouseRef.current.y) > 1;
       if (mouseMoved) {
@@ -132,14 +161,6 @@ const GameEngine: React.FC<GameEngineProps> = ({
         );
         lastMouseRef.current = { ...mouseRef.current };
       }
-    }
-
-    // Stab animation logic
-    if (isStabbingRef.current) {
-      stabOffsetRef.current += 12;
-      if (stabOffsetRef.current > 40) isStabbingRef.current = false;
-    } else {
-      stabOffsetRef.current = Math.max(0, stabOffsetRef.current - 3);
     }
 
     // 4. Enemy Spawning
@@ -153,9 +174,94 @@ const GameEngine: React.FC<GameEngineProps> = ({
     const bladeAngle = currentBladeAngleRef.current;
     const px = playerPosRef.current.x;
     const py = playerPosRef.current.y;
-    const bladeFullLength = statsRef.current.bladeLength + stabOffsetRef.current;
+    const bladeFullLength = statsRef.current.bladeLength;
     const bladeTipX = px + Math.cos(bladeAngle) * bladeFullLength;
     const bladeTipY = py + Math.sin(bladeAngle) * bladeFullLength;
+
+    // Skill Inputs
+    const handleSkill = (key: 'q' | 'e' | 'f') => {
+      const skill = statsRef.current.skills[key];
+      if (skill.unlocked && skill.charges > 0) {
+        // Use skill
+        onUpdateStats(prev => ({
+          ...prev,
+          skills: {
+            ...prev.skills,
+            [key]: { ...prev.skills[key], charges: prev.skills[key].charges - 1, currentKills: 0 }
+          }
+        }));
+
+        if (key === 'q') {
+          // Flying Sword
+          const count = skill.extraValue || 1;
+          const spread = 0.2; 
+          for (let i = 0; i < count; i++) {
+            const angleOffset = (i - (count - 1) / 2) * spread;
+            const finalAngle = bladeAngle + angleOffset;
+            flyingSwordsRef.current.push({
+              id: Math.random().toString(36).substr(2, 9),
+              x: px,
+              y: py,
+              vx: Math.cos(finalAngle) * 20,
+              vy: Math.sin(finalAngle) * 20,
+              angle: finalAngle,
+              life: 1.0
+            });
+          }
+        } else if (key === 'e') {
+          // Spin Attack
+          onUpdateStats(prev => ({ ...prev, isSpinning: true, isInvincible: true }));
+          setTimeout(() => {
+            onUpdateStats(prev => ({ ...prev, isSpinning: false, isInvincible: false }));
+          }, skill.extraValue || 2000);
+        } else if (key === 'f') {
+          // Screen Clear
+          const centerX = window.innerWidth / 2;
+          const centerY = window.innerHeight / 2;
+          const camX = cameraRef.current.x;
+          const camY = cameraRef.current.y;
+          
+          enemiesRef.current.forEach(enemy => {
+            const screenX = enemy.x - camX + centerX;
+            const screenY = enemy.y - camY + centerY;
+            if (screenX > 0 && screenX < window.innerWidth && screenY > 0 && screenY < window.innerHeight) {
+              enemy.hp -= statsRef.current.attackPower * (skill.damageMult || 5);
+              createParticles(enemy.x, enemy.y, '#fff', 5);
+              enemy.vx += (enemy.x - px) * 0.1;
+              enemy.vy += (enemy.y - py) * 0.1;
+            }
+          });
+          createParticles(px, py, '#fff', 50);
+        }
+      }
+    };
+
+    if (keysRef.current['q']) { handleSkill('q'); keysRef.current['q'] = false; }
+    if (keysRef.current['e']) { handleSkill('e'); keysRef.current['e'] = false; }
+    if (keysRef.current['f']) { handleSkill('f'); keysRef.current['f'] = false; }
+
+    // Update Flying Swords
+    flyingSwordsRef.current.forEach((fs, idx) => {
+      fs.x += fs.vx;
+      fs.y += fs.vy;
+      fs.life -= 0.01;
+      if (fs.life <= 0) flyingSwordsRef.current.splice(idx, 1);
+      
+      // Collision with enemies
+      enemiesRef.current.forEach(enemy => {
+        const dx = enemy.x - fs.x;
+        const dy = enemy.y - fs.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < enemy.radius + 10) {
+          enemy.hp -= statsRef.current.attackPower * (statsRef.current.skills.q.damageMult || 1);
+          enemy.vx += fs.vx * 0.5;
+          enemy.vy += fs.vy * 0.5;
+          createParticles(fs.x, fs.y, '#fff', 2);
+          // Don't destroy flying sword immediately, let it pierce? 
+          // User said "same damage and knockback", usually flying swords pierce in these games.
+        }
+      });
+    });
 
     enemiesRef.current.forEach((enemy, index) => {
       // Basic movement towards player
@@ -175,7 +281,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
       enemy.vy *= 0.85;
 
       // Damage player
-      if (distToPlayer < enemy.radius + 15) {
+      if (distToPlayer < enemy.radius + 15 && !statsRef.current.isInvincible) {
         onUpdateStats(prev => ({ ...prev, hp: Math.max(0, prev.hp - enemy.damage) }));
         if (statsRef.current.hp <= 0) onGameOver(gameTimeRef.current);
       }
@@ -189,7 +295,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
 
       if (distToBlade < enemy.radius + statsRef.current.bladeWidth) {
         // Apply Damage
-        enemy.hp -= statsRef.current.attackPower * (isStabbingRef.current ? 3 : 1) / 10;
+        enemy.hp -= statsRef.current.attackPower / 10;
         createParticles(enemy.x, enemy.y, enemy.color, 1);
 
         // Calculate Knockback: smaller radius = bigger knockback
@@ -198,7 +304,7 @@ const GameEngine: React.FC<GameEngineProps> = ({
         const knockDist = Math.sqrt(knockDirX * knockDirX + knockDirY * knockDirY) || 1;
         
         // Base knockback power
-        const basePower = isStabbingRef.current ? 12 : 4;
+        const basePower = 4;
         const massFactor = 20 / enemy.radius; // Smaller radius = higher multiplier
         const power = basePower * massFactor;
 
@@ -212,7 +318,22 @@ const GameEngine: React.FC<GameEngineProps> = ({
           onUpdateStats(prev => {
             const newXp = prev.xp + 10;
             if (newXp >= prev.nextLevelXp) setTimeout(onLevelUp, 0);
-            return { ...prev, xp: newXp, killCount: prev.killCount + 1 };
+            
+            // Skill recharge
+            const newSkills = { ...prev.skills };
+            Object.keys(newSkills).forEach(k => {
+              const key = k as 'q' | 'e' | 'f';
+              const s = newSkills[key];
+              if (s.unlocked && s.charges < s.maxCharges) {
+                s.currentKills++;
+                if (s.currentKills >= s.killsNeeded) {
+                  s.charges++;
+                  s.currentKills = 0;
+                }
+              }
+            });
+
+            return { ...prev, xp: newXp, killCount: prev.killCount + 1, skills: newSkills };
           });
         }
       }
@@ -271,10 +392,15 @@ const GameEngine: React.FC<GameEngineProps> = ({
     enemiesRef.current.forEach(enemy => {
       ctx.shadowBlur = 10; ctx.shadowColor = enemy.color; ctx.fillStyle = enemy.color;
       ctx.beginPath(); ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2); ctx.fill();
-      const barWidth = enemy.radius * 2;
-      ctx.fillStyle = '#444'; ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, barWidth, 4);
-      ctx.fillStyle = '#f87171'; ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, barWidth * (enemy.hp / enemy.maxHp), 4);
+      
       ctx.shadowBlur = 0;
+      const barWidth = enemy.radius * 2;
+      const hpRatio = Math.max(0, enemy.hp / enemy.maxHp);
+      
+      ctx.fillStyle = '#444'; 
+      ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, barWidth, 4);
+      ctx.fillStyle = '#f87171'; 
+      ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 10, barWidth * hpRatio, 4);
     });
 
     // Player
@@ -285,13 +411,43 @@ const GameEngine: React.FC<GameEngineProps> = ({
 
     // Blade
     const bladeAngle = currentBladeAngleRef.current;
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = statsRef.current.bladeWidth; ctx.lineCap = 'round'; ctx.shadowColor = '#60a5fa';
+    ctx.strokeStyle = statsRef.current.isSpinning ? '#f472b6' : '#fff'; 
+    ctx.lineWidth = statsRef.current.bladeWidth; 
+    ctx.lineCap = 'round'; 
+    ctx.shadowColor = statsRef.current.isSpinning ? '#ec4899' : '#60a5fa';
     ctx.beginPath();
     ctx.moveTo(px, py);
-    const len = statsRef.current.bladeLength + stabOffsetRef.current;
+    const len = statsRef.current.bladeLength;
     ctx.lineTo(px + Math.cos(bladeAngle) * len, py + Math.sin(bladeAngle) * len);
     ctx.stroke(); 
     ctx.shadowBlur = 0;
+
+    // Flying Swords
+    flyingSwordsRef.current.forEach(fs => {
+      ctx.save();
+      ctx.translate(fs.x, fs.y);
+      ctx.rotate(fs.angle);
+      ctx.globalAlpha = fs.life;
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = '#60a5fa';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-20, 0);
+      ctx.lineTo(20, 0);
+      ctx.stroke();
+      
+      // Add a small "crossguard" for the flying sword
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-10, -8);
+      ctx.lineTo(-10, 8);
+      ctx.stroke();
+      
+      ctx.restore();
+    });
+    ctx.globalAlpha = 1;
 
     ctx.restore();
 
@@ -323,12 +479,8 @@ const GameEngine: React.FC<GameEngineProps> = ({
         mouseRef.current = { x: e.clientX, y: e.clientY }; 
     };
     
-    const handleMouseDown = (e: MouseEvent) => {
-        // Left click or any mouse click starts a stab
-        isStabbingRef.current = true;
-    };
-
     const handleTouchStart = (e: TouchEvent) => {
+      if ((e.target as HTMLElement).closest('button')) return;
       if (gameState === GameState.PLAYING) e.preventDefault();
       
       for (let i = 0; i < e.changedTouches.length; i++) {
@@ -352,7 +504,6 @@ const GameEngine: React.FC<GameEngineProps> = ({
               vector: { x: 0, y: 0 },
               touchId: touch.identifier
             };
-            isStabbingRef.current = true; // Right side tap triggers stab
           }
         }
       }
@@ -403,7 +554,6 @@ const GameEngine: React.FC<GameEngineProps> = ({
 
     window.addEventListener('resize', handleResize);
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('touchstart', handleTouchStart, { passive: false });
     window.addEventListener('touchmove', handleTouchMove, { passive: false });
     window.addEventListener('touchend', handleTouchEnd);
@@ -424,7 +574,6 @@ const GameEngine: React.FC<GameEngineProps> = ({
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);

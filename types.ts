@@ -6,6 +6,18 @@ export enum GameState {
   GAMEOVER = 'GAMEOVER',
 }
 
+export interface SkillState {
+  unlocked: boolean;
+  charges: number;
+  maxCharges: number;
+  killsNeeded: number;
+  currentKills: number;
+  level: number;
+  damageMult: number;
+  extraValue?: number; // Used for count (Q), duration (E), etc.
+  extraValue2?: number; // Used for spinSpeed (E), etc.
+}
+
 export interface PlayerStats {
   hp: number;
   maxHp: number;
@@ -17,6 +29,13 @@ export interface PlayerStats {
   level: number;
   nextLevelXp: number;
   killCount: number;
+  skills: {
+    q: SkillState;
+    e: SkillState;
+    f: SkillState;
+  };
+  isInvincible: boolean;
+  isSpinning: boolean;
 }
 
 export interface Enemy {

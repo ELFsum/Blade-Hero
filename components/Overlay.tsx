@@ -30,7 +30,8 @@ const Overlay: React.FC<OverlayProps> = ({
             NEON BLADE
           </h1>
           <p className="text-slate-400 mb-8">
-            Defend yourself against the void swarm. Move with WASD, aim with mouse, and click to lunge.
+            Defend yourself against the void swarm. Move with WASD, aim with mouse.
+            Unlock skills (Q, E, F) by leveling up and recharge them by defeating enemies.
           </p>
           <button 
             onClick={onStart}
